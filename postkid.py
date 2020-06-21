@@ -146,19 +146,25 @@ class Request:
 class Collection:
     def __init__(self, collection_file: str):
         raw_collection = loadYAML(collection_file)
-        self.requests = [
-            Request(**req) for req in raw_collection.pop("requests", [])]
+        if raw_collection is None:
+            raise Exception("No content found on collection file")
+        requests = raw_collection.pop("requests", [])
+        requests = requests if requests is not None else []
+        self.requests = [Request(**req) for req in requests]
+        enviroments = raw_collection.pop("enviroments", {})
+        enviroments = enviroments.items() if enviroments is not None else {}
         self.enviroments = [
-            Enviroment(name, **value) for name,value in raw_collection.pop("enviroments", {}).items()]
-        self.variables = Enviroment(
-            "__default__", **raw_collection.pop("variables", {}))
+            Enviroment(name, **value) for name,value in enviroments]
+        variables = raw_collection.pop("variables", {})
+        variables = variables if variables is not None else {}
+        self.variables = Enviroment("__default__", **variables)
         for name,value in raw_collection.items():
             setattr(self, name, value)
     
-    def get_request(self, name: str):
+    def get_request(self, name: str) -> Request:
         return self.requests[self.requests.index(name)]
     
-    def get_enviroment(self, name: str):
+    def get_enviroment(self, name: str) -> Enviroment:
         if name is None or len(name) == 0: return
         return self.enviroments[self.enviroments.index(name)]
     
@@ -183,12 +189,14 @@ def send_request(
         collection: Collection,
         request_name: str,
         enviroment: str,
+        query: Dict[str,str],
         show_response_data_only = False,
         show_response_header = False,
         show_response_meta_only = False):
     request = collection.get_request(request_name)
     request.override_variables(collection.get_enviroment(enviroment))
     request.override_variables(collection.variables)
+    if len(query) > 0: request.params = query
     show_results(
         request.send(),
         show_response_data_only,
@@ -206,6 +214,7 @@ def start():
         collection,
         parameters.request_name,
         parameters.enviroment,
+        parameters.query,
         parameters.show_response_data_only,
         parameters.show_response_header,
         parameters.show_response_meta_only)
