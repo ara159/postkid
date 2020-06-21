@@ -95,7 +95,14 @@ class Enviroment:
             setattr(self, name, value)
     
     def as_dict(self):
-        return self.__dict__
+        env_dict = self.__dict__.copy()
+        name = env_dict.pop("name")
+        return {name: env_dict}
+    
+    def content_as_dict(self):
+        env_dict = self.__dict__.copy()
+        env_dict.pop("name")
+        return env_dict
     
     def __eq__(self, other):
         return self.name == other
@@ -116,13 +123,14 @@ class Request:
         self.timeout = 2**16
         self.allow_redirects = True
         self.verify = False
+        self.script_pos = None
         for name,value in kwgs.items():
             setattr(self, name, value)
     
     def override_variables(self, enviroment: Enviroment):
         if enviroment is None: return
         dump = self._as_raw_json()
-        for name,value in enviroment.as_dict().items():
+        for name,value in enviroment.content_as_dict().items():
             if value is None: continue
             dump = dump.replace("{{" + name + "}}", str(value))
         self.__init__(**json.loads(dump))
@@ -130,6 +138,7 @@ class Request:
     def send(self):
         request_params = self.__dict__.copy()
         request_params.pop("name")
+        request_params.pop("script_pos")
         request_params["data"] = request_params.pop("body")
         return requestSend(**request_params)
     
@@ -145,20 +154,22 @@ class Request:
 
 class Collection:
     def __init__(self, collection_file: str):
-        raw_collection = loadYAML(collection_file)
-        if raw_collection is None:
+        self.collection_file = collection_file
+        self.raw_collection = loadYAML(self.collection_file)
+        if self.raw_collection is None:
             raise Exception("No content found on collection file")
-        requests = raw_collection.pop("requests", [])
+        requests = self.raw_collection.pop("requests", [])
         requests = requests if requests is not None else []
         self.requests = [Request(**req) for req in requests]
-        enviroments = raw_collection.pop("enviroments", {})
+        enviroments = self.raw_collection.pop("enviroments", {})
         enviroments = enviroments.items() if enviroments is not None else {}
         self.enviroments = [
             Enviroment(name, **value) for name,value in enviroments]
-        variables = raw_collection.pop("variables", {})
+        variables = self.raw_collection.pop("variables", {})
         variables = variables if variables is not None else {}
         self.variables = Enviroment("__default__", **variables)
-        for name,value in raw_collection.items():
+        self.enviroments.append(self.variables)
+        for name,value in self.raw_collection.items():
             setattr(self, name, value)
     
     def get_request(self, name: str) -> Request:
@@ -185,6 +196,30 @@ def show_results(response, data_only, header, meta_only):
         else:
             print(response.text)
 
+
+def edit_enviroment(
+        collection: Collection,
+        enviroment_name: str,
+        var_name: str,
+        var_value: str):
+    if enviroment_name is None: enviroment_name = "__default__"
+    if not isinstance(var_name, (str,)): return
+    if not isinstance(var_value, (str,int,float)): return
+    if not isinstance(enviroment_name, (str,)): return
+    try:
+        enviroment = collection.get_enviroment(enviroment_name)
+        setattr(enviroment, var_name, var_value)
+    except:
+        enviroment = Enviroment(enviroment_name, **{var_name: var_value})
+        collection.enviroments.append(enviroment)
+    with open(collection.collection_file.replace(".yaml", ".tmp.yaml"), "w") as f:
+        f.write(yaml.dump(
+            [env.as_dict() for env in collection.enviroments],
+            indent=2,
+            sort_keys=True,
+            default_flow_style=False))
+
+
 def send_request(
         collection: Collection,
         request_name: str,
@@ -197,15 +232,25 @@ def send_request(
     request.override_variables(collection.get_enviroment(enviroment))
     request.override_variables(collection.variables)
     if len(query) > 0: request.params = query
+    response = request.send()
     show_results(
-        request.send(),
+        response,
         show_response_data_only,
         show_response_header,
         show_response_meta_only)
+    setenv = lambda env,name,value: edit_enviroment(collection, env, name, value)
+    setcurenv = lambda name,value: edit_enviroment(collection, enviroment, name, value)
+    eval(request.script_pos, {
+        "req": request,
+        "res": response,
+        "setenv": setenv,
+        "setcurenv": setcurenv
+    })
 
 
 def start():
-    parameters = Parameters(sys.argv[1:])
+    # parameters = Parameters(sys.argv[1:])
+    parameters = Parameters(["example", "index"])
     collection = Collection(
         parameters.collections_folder + 
         ("/" if len(parameters.collections_folder) > 0 else "") +

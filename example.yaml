@@ -4,6 +4,7 @@ requests:
   - name: index
     url: '{{base_url}}'
     method: GET
+    script_pos: 'setcurenv("a", res.status_code)'
 
 enviroments:
 variables:
