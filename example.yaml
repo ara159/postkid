@@ -1,0 +1,10 @@
+# Collection file
+
+requests:
+  - name: index
+    url: '{{base_url}}'
+    method: GET
+
+enviroments:
+variables:
+  base_url: https://api.github.com
