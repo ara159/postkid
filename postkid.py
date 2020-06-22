@@ -171,14 +171,34 @@ class Collection:
         self.enviroments.append(self.variables)
         for name,value in self.raw_collection.items():
             setattr(self, name, value)
+        tmp_file = self.collection_file.replace(".yaml", ".tmp.yaml")
+        if os.path.exists(tmp_file):
+            for name,value in loadYAML(tmp_file).items():
+                self.enviroments.remove(name)
+                self.enviroments.append(Enviroment(name, **value))
     
     def get_request(self, name: str) -> Request:
         return self.requests[self.requests.index(name)]
     
     def get_enviroment(self, name: str) -> Enviroment:
-        if name is None or len(name) == 0: return
+        if name is None: name = "__default__"
+        if len(name) == 0: return
         return self.enviroments[self.enviroments.index(name)]
     
+    def get_enviroments_as_dict(self):
+        _tmp_ = {}
+        for env in self.enviroments:
+            _tmp_[env.name] = env.content_as_dict()
+        return _tmp_
+    
+    def edit_enviroment(self, enviroment_name: str, var_name: str, var_value: str):
+        try:
+            enviroment = self.get_enviroment(enviroment_name)
+            setattr(enviroment, var_name, var_value)
+        except:
+            enviroment = Enviroment(enviroment_name, **{var_name: var_value})
+            self.enviroments.append(enviroment)
+
     def __repr__(self):
         return parseAsJSON(self.__dict__)
 
@@ -206,15 +226,10 @@ def edit_enviroment(
     if not isinstance(var_name, (str,)): return
     if not isinstance(var_value, (str,int,float)): return
     if not isinstance(enviroment_name, (str,)): return
-    try:
-        enviroment = collection.get_enviroment(enviroment_name)
-        setattr(enviroment, var_name, var_value)
-    except:
-        enviroment = Enviroment(enviroment_name, **{var_name: var_value})
-        collection.enviroments.append(enviroment)
+    collection.edit_enviroment(enviroment_name, var_name, var_value)
     with open(collection.collection_file.replace(".yaml", ".tmp.yaml"), "w") as f:
         f.write(yaml.dump(
-            [env.as_dict() for env in collection.enviroments],
+            collection.get_enviroments_as_dict(),
             indent=2,
             sort_keys=True,
             default_flow_style=False))
@@ -249,8 +264,7 @@ def send_request(
 
 
 def start():
-    # parameters = Parameters(sys.argv[1:])
-    parameters = Parameters(["example", "index"])
+    parameters = Parameters(sys.argv[1:])
     collection = Collection(
         parameters.collections_folder + 
         ("/" if len(parameters.collections_folder) > 0 else "") +
