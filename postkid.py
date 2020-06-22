@@ -255,12 +255,13 @@ def send_request(
         show_response_meta_only)
     setenv = lambda env,name,value: edit_enviroment(collection, env, name, value)
     setcurenv = lambda name,value: edit_enviroment(collection, enviroment, name, value)
-    eval(request.script_pos, {
-        "req": request,
-        "res": response,
-        "setenv": setenv,
-        "setcurenv": setcurenv
-    })
+    if request.script_pos is not None:
+        eval(request.script_pos, {
+            "req": request,
+            "res": response,
+            "setenv": setenv,
+            "setcurenv": setcurenv
+        })
 
 
 def start():
