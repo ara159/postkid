@@ -104,6 +104,10 @@ class Enviroment:
         env_dict.pop("name")
         return env_dict
     
+    def edit(self, vars_dict):
+        for name,value in vars_dict.items():
+            setattr(self, name, value)
+    
     def __eq__(self, other):
         return self.name == other
     
@@ -167,37 +171,43 @@ class Collection:
             Enviroment(name, **value) for name,value in enviroments]
         variables = self.raw_collection.pop("variables", {})
         variables = variables if variables is not None else {}
-        self.variables = Enviroment("__default__", **variables)
-        self.enviroments.append(self.variables)
+        self.enviroments.append(Enviroment("__default__", **variables))
         for name,value in self.raw_collection.items():
             setattr(self, name, value)
         tmp_file = self.collection_file.replace(".yaml", ".tmp.yaml")
-        if os.path.exists(tmp_file):
-            for name,value in loadYAML(tmp_file).items():
-                self.enviroments.remove(name)
-                self.enviroments.append(Enviroment(name, **value))
+        enviroments_tmp = loadYAML(tmp_file) if os.path.exists(tmp_file) else {}
+        enviroments_tmp = enviroments_tmp.items() if enviroments_tmp is not None else {}
+        self.enviroments_tmp = [
+            Enviroment(name, **value) for name,value in enviroments_tmp]
     
     def get_request(self, name: str) -> Request:
         return self.requests[self.requests.index(name)]
     
-    def get_enviroment(self, name: str) -> Enviroment:
+    def get_enviroment(self, name: str, tmp=False) -> Enviroment:
         if name is None: name = "__default__"
         if len(name) == 0: return
-        return self.enviroments[self.enviroments.index(name)]
+        if tmp:
+            return self.enviroments_tmp[self.enviroments_tmp.index(name)]
+        else:
+            return self.enviroments[self.enviroments.index(name)]
     
-    def get_enviroments_as_dict(self):
+    def get_enviroments_as_dict(self, tmp=False):
         _tmp_ = {}
-        for env in self.enviroments:
-            _tmp_[env.name] = env.content_as_dict()
+        env = self.enviroments if not tmp else self.enviroments_tmp
+        for i in env:
+            _tmp_[i.name] = i.content_as_dict()
         return _tmp_
     
-    def edit_enviroment(self, enviroment_name: str, var_name: str, var_value: str):
+    def edit_enviroment(self, enviroment_name: str, var_name: str, var_value: str, tmp=False):
         try:
-            enviroment = self.get_enviroment(enviroment_name)
-            setattr(enviroment, var_name, var_value)
+            enviroment = self.get_enviroment(enviroment_name, tmp)
+            enviroment.edit({var_name: var_value})
         except:
             enviroment = Enviroment(enviroment_name, **{var_name: var_value})
-            self.enviroments.append(enviroment)
+            if tmp:
+                self.enviroments_tmp.append(enviroment)
+            else:
+                self.enviroments.append(enviroment)
 
     def __repr__(self):
         return parseAsJSON(self.__dict__)
@@ -226,10 +236,10 @@ def edit_enviroment(
     if not isinstance(var_name, (str,)): return
     if not isinstance(var_value, (str,int,float)): return
     if not isinstance(enviroment_name, (str,)): return
-    collection.edit_enviroment(enviroment_name, var_name, var_value)
+    collection.edit_enviroment(enviroment_name, var_name, var_value, True)
     with open(collection.collection_file.replace(".yaml", ".tmp.yaml"), "w") as f:
         f.write(yaml.dump(
-            collection.get_enviroments_as_dict(),
+            collection.get_enviroments_as_dict(True),
             indent=2,
             sort_keys=True,
             default_flow_style=False))
@@ -244,8 +254,9 @@ def send_request(
         show_response_header = False,
         show_response_meta_only = False):
     request = collection.get_request(request_name)
+    request.override_variables(collection.get_enviroment(enviroment, True))
     request.override_variables(collection.get_enviroment(enviroment))
-    request.override_variables(collection.variables)
+    request.override_variables(collection.get_enviroment("__default__"))
     if len(query) > 0: request.params = query
     response = request.send()
     show_results(
