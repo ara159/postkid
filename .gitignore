@@ -1,2 +1,4 @@
 .vscode
 *.tmp.yaml
+*.egg-info
+__pycache__

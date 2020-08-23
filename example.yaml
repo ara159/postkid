@@ -15,6 +15,7 @@ requests:
     data: '{
       "completed": true
     }'
+    script_pos: 'setenv("test", "value")'
     headers:
         Content-Type: "application/json"
   
