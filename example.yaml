@@ -1,11 +1,23 @@
 # Collection file
 
 requests:
-  - name: index
+  - name: All Todos
     url: '{{base_url}}'
     method: GET
-    script_pos: 'setcurenv("a", res.status_code)'
+  
+  - name: Especific
+    url: '{{base_url}}/{{id}}'
+    method: GET
 
+  - name: Mark As Complete
+    url: '{{base_url}}/{{id}}'
+    method: PUT
+    data: '{
+      "completed": true
+    }'
+    headers:
+        Content-Type: "application/json"
+  
 enviroments:
 variables:
-  base_url: https://api.github.com
+  base_url: https://jsonplaceholder.typicode.com/todos

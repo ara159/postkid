@@ -10,6 +10,9 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
+DEFAULT_COLLECTION_NAME = "__default__"
+
+
 def loadYAML(path) -> dict:
     return yaml.load(open(path).read(), Loader=yaml.Loader)
 
@@ -40,14 +43,14 @@ class Parameters:
         self.enviroment = None
         self.collection_file = None
         self.request_name = None
-        self._parse(args)
+        self._args = args
     
-    def _parse(self, args: List[str]):
+    def parse(self):
         try:
             opts = 'RI:q:he:p:', ["header", "help"]
-            options, remainder = getopt.gnu_getopt(args, opts[0], opts[1])
+            options, remainder = getopt.gnu_getopt(self._args, opts[0], opts[1])
         except getopt.GetoptError as err:
-            print("ERROR:", err); raise err
+            raise err
         for opt, arg in options:
             if opt == "--header":
                 self.show_response_header = True
@@ -57,24 +60,34 @@ class Parameters:
                 self.show_response_meta_only = True
             if opt == "-q":
                 for param in arg.split("&"):
-                    p = param.split("=")
-                    self.query[p[0]] = p[1] if len(p) > 0  else ""
+                    _param = param.split("=")
+                    self.query[_param[0]] = _param[1] if len(_param) > 0  else ""
             if opt == "-p":
                 self.collections_folder = arg
             if opt == "-e":
                 self.enviroment = arg
             if opt in ("-h", "--help"):
-                self._help(); raise Exception("Showing the help message")
+                self._help(); exit(0)
         if len(remainder) == 0:
+            self._help()
             raise Exception("collection and request name is required")
         else:
             self.collection_file = remainder[0]
             self.request_name = remainder[1]
+            if len(remainder) > 2:
+                self.request_vars = {}
+                for var in remainder[2:]:
+                    name, value = var.split("=")
+                    self.request_vars[name] = value
+        return self
     
     def _help(self):
         print("""
 PostKid v0.1
 
+Ex.: postkid <collection> <request_name> [<var1_name>=<var1_value> <var1_name>=<var1_value> ...]
+
+-h or --help: Show this help message
 -R: Show only response body
 -I: Show only the response meta data (no-body)
 -e <enviroment_name> or --mod <mod_name>: Set the mod
@@ -91,7 +104,7 @@ PostKid v0.1
 class Enviroment:
     def __init__(self, name, **kwargs):
         self.name = name
-        for name,value in kwargs.items():
+        for name, value in kwargs.items():
             setattr(self, name, value)
     
     def as_dict(self):
@@ -105,7 +118,7 @@ class Enviroment:
         return env_dict
     
     def edit(self, vars_dict):
-        for name,value in vars_dict.items():
+        for name, value in vars_dict.items():
             setattr(self, name, value)
     
     def __eq__(self, other):
@@ -128,13 +141,14 @@ class Request:
         self.allow_redirects = True
         self.verify = False
         self.script_pos = None
-        for name,value in kwgs.items():
+        for name, value in kwgs.items():
             setattr(self, name, value)
     
     def override_variables(self, enviroment: Enviroment):
-        if enviroment is None: return
+        if enviroment is None:
+            return
         dump = self._as_raw_json()
-        for name,value in enviroment.content_as_dict().items():
+        for name, value in enviroment.content_as_dict().items():
             if value is None: continue
             dump = dump.replace("{{" + name + "}}", str(value))
         self.__init__(**json.loads(dump))
@@ -157,46 +171,67 @@ class Request:
 
 
 class Collection:
-    def __init__(self, collection_file: str):
-        self.collection_file = collection_file
+    def __init__(self, path: str):
+        self.collection_file = path
+        self.tmp_file = self.collection_file.replace(".yaml", ".tmp.yaml")
+        self._read_collection_file()
+        self._read_requests()
+        self._read_environments()
+        self._read_variables()
+        self._load_tmp_environments()
+        for name, value in self.raw_collection.items():
+            setattr(self, name, value)
+    
+    def _read_collection_file(self):
         self.raw_collection = loadYAML(self.collection_file)
         if self.raw_collection is None:
             raise Exception("No content found on collection file")
+    
+    def _read_requests(self):
         requests = self.raw_collection.pop("requests", [])
         requests = requests if requests is not None else []
         self.requests = [Request(**req) for req in requests]
+
+    def _read_environments(self):
         enviroments = self.raw_collection.pop("enviroments", {})
         enviroments = enviroments.items() if enviroments is not None else {}
         self.enviroments = [
             Enviroment(name, **value) for name,value in enviroments]
+
+    def _read_variables(self):
         variables = self.raw_collection.pop("variables", {})
         variables = variables if variables is not None else {}
-        self.enviroments.append(Enviroment("__default__", **variables))
-        for name,value in self.raw_collection.items():
-            setattr(self, name, value)
-        tmp_file = self.collection_file.replace(".yaml", ".tmp.yaml")
-        enviroments_tmp = loadYAML(tmp_file) if os.path.exists(tmp_file) else {}
-        enviroments_tmp = enviroments_tmp.items() if enviroments_tmp is not None else {}
+        self.enviroments.append(Enviroment(DEFAULT_COLLECTION_NAME, **variables))
+
+    def _load_tmp_environments(self):
+        _tmp_environments = {}
+        if os.path.exists(self.tmp_file):
+            _tmp_environments = loadYAML(self.tmp_file).items()
         self.enviroments_tmp = [
-            Enviroment(name, **value) for name,value in enviroments_tmp]
-    
+            Enviroment(name, **value) for name, value in _tmp_environments]
+        if DEFAULT_COLLECTION_NAME not in self.enviroments_tmp:
+            self.enviroments_tmp.append(Enviroment(DEFAULT_COLLECTION_NAME))
     def get_request(self, name: str) -> Request:
         return self.requests[self.requests.index(name)]
     
     def get_enviroment(self, name: str, tmp=False) -> Enviroment:
-        if name is None: name = "__default__"
-        if len(name) == 0: return
+        if not name:
+            name = DEFAULT_COLLECTION_NAME
+
         if tmp:
             return self.enviroments_tmp[self.enviroments_tmp.index(name)]
+        
         else:
             return self.enviroments[self.enviroments.index(name)]
     
     def get_enviroments_as_dict(self, tmp=False):
-        _tmp_ = {}
-        env = self.enviroments if not tmp else self.enviroments_tmp
-        for i in env:
-            _tmp_[i.name] = i.content_as_dict()
-        return _tmp_
+        result_environment = {}
+        environments = self.enviroments
+        if tmp:
+            environments = self.enviroments_tmp
+        for environment in environments:
+            result_environment[environment.name] = environment.content_as_dict()
+        return result_environment
     
     def edit_enviroment(self, enviroment_name: str, var_name: str, var_value: str, tmp=False):
         try:
@@ -232,13 +267,13 @@ def edit_enviroment(
         enviroment_name: str,
         var_name: str,
         var_value: str):
-    if enviroment_name is None: enviroment_name = "__default__"
+    if enviroment_name is None: enviroment_name = DEFAULT_COLLECTION_NAME
     if not isinstance(var_name, (str,)): return
     if not isinstance(var_value, (str,int,float)): return
     if not isinstance(enviroment_name, (str,)): return
     collection.edit_enviroment(enviroment_name, var_name, var_value, True)
-    with open(collection.collection_file.replace(".yaml", ".tmp.yaml"), "w") as f:
-        f.write(yaml.dump(
+    with open(collection.tmp_file, "w") as tmp_file:
+        tmp_file.write(yaml.dump(
             collection.get_enviroments_as_dict(True),
             indent=2,
             sort_keys=True,
@@ -249,23 +284,26 @@ def send_request(
         collection: Collection,
         request_name: str,
         enviroment: str,
-        query: Dict[str,str],
+        query_params: Dict[str,str],
+        request_vars: Dict[str,str],
         show_response_data_only = False,
         show_response_header = False,
         show_response_meta_only = False):
     request = collection.get_request(request_name)
+    request.override_variables(Enviroment("request_vars", **request_vars))
     request.override_variables(collection.get_enviroment(enviroment, True))
     request.override_variables(collection.get_enviroment(enviroment))
-    request.override_variables(collection.get_enviroment("__default__"))
-    if len(query) > 0: request.params = query
+    request.override_variables(collection.get_enviroment(DEFAULT_COLLECTION_NAME))
+    if query_params:
+        request.params = query_params
     response = request.send()
     show_results(
         response,
         show_response_data_only,
         show_response_header,
         show_response_meta_only)
-    setenv = lambda env,name,value: edit_enviroment(collection, env, name, value)
-    setcurenv = lambda name,value: edit_enviroment(collection, enviroment, name, value)
+    setenv = lambda env, name, value: edit_enviroment(collection, env, name, value)
+    setcurenv = lambda name, value: edit_enviroment(collection, enviroment, name, value)
     if request.script_pos is not None:
         eval(request.script_pos, {
             "req": request,
@@ -276,7 +314,7 @@ def send_request(
 
 
 def start():
-    parameters = Parameters(sys.argv[1:])
+    parameters = Parameters(sys.argv[1:]).parse()
     collection = Collection(
         parameters.collections_folder + 
         ("/" if len(parameters.collections_folder) > 0 else "") +
@@ -286,6 +324,7 @@ def start():
         parameters.request_name,
         parameters.enviroment,
         parameters.query,
+        parameters.request_vars,
         parameters.show_response_data_only,
         parameters.show_response_header,
         parameters.show_response_meta_only)
